@@ -23,6 +23,7 @@ class MirAIeBroker:
 
     def __init__(self):
         self._client = paho.Client(
+            callback_api_version=paho.CallbackAPIVersion.VERSION1,
             client_id=self._generate_client_id(),
             transport="tcp",
             protocol=paho.MQTTv31,
