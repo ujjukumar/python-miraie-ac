@@ -1,6 +1,7 @@
 """Represents a home"""
 from .device import Device
 
+
 class Home:
     """The Home class"""
     home_id: str

@@ -1,13 +1,23 @@
 """The MirAIe API module"""
 
+import asyncio
+import logging
 import math
 import random
-import asyncio
-from typing import Callable
+from collections.abc import Callable
+
 import aiohttp
+
 from .broker import MirAIeBroker
+from .constants import (
+    DEVICE_DETAILS_URL,
+    HOMES_URL,
+    HTTP_CLIENT_ID,
+    HTTP_TIMEOUT_SECONDS,
+    LOGIN_URL,
+    STATUS_URL,
+)
 from .device import Device
-from .constants import DEVICE_DETAILS_URL, HOMES_URL,HTTP_CLIENT_ID,LOGIN_URL,STATUS_URL
 from .deviceStatus import DeviceStatus
 from .enums import (
     AuthType,
@@ -23,8 +33,12 @@ from .home import Home
 from .user import User
 from .utils import to_float
 
+logger = logging.getLogger(__name__)
+
+
 class MirAIeAPI:
     """The MirAIe API class"""
+
     _auth_type: str
     _login_id: str
     _password: str
@@ -33,6 +47,7 @@ class MirAIeAPI:
     _home: Home
     _topics: list[str] = []
     _broker: MirAIeBroker
+    _timeout: aiohttp.ClientTimeout
 
     @property
     def devices(self) -> list[Device]:
@@ -43,7 +58,8 @@ class MirAIeAPI:
         self._auth_type = str(auth_type.value)
         self._login_id = login_id
         self._password = password
-        self._http_session = aiohttp.ClientSession()
+        self._timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT_SECONDS)
+        self._http_session = aiohttp.ClientSession(timeout=self._timeout)
         self._broker = MirAIeBroker()
 
     async def __aenter__(self):
@@ -55,9 +71,12 @@ class MirAIeAPI:
 
     async def initialize(self):
         """Initializes the MirAIe API"""
-
         self._user = await self._login()
+        logger.info("Logged in as user %s", self._user.user_id)
+
         self._home = await self._get_home_details()
+        logger.info("Found %d device(s) in home %s", len(self._home.devices), self._home.home_id)
+
         self._broker.set_topics(self._topics)
         self._broker.init_broker(self._home.home_id, self._user.access_token, self.reconnect_broker)
         self._broker.connect()
@@ -68,6 +87,7 @@ class MirAIeAPI:
         fut = asyncio.run_coroutine_threadsafe(self._login(), loop)
 
         self._user = fut.result()
+        logger.info("Re-authenticated for MQTT reconnect")
         reconnect_callback(self._home.home_id, self._user.access_token)
 
     async def _login(self):
@@ -78,6 +98,7 @@ class MirAIeAPI:
         }
 
         data[self._auth_type] = self._login_id
+        logger.debug("Logging in with auth type: %s", self._auth_type)
         response = await self._http_session.post(LOGIN_URL, json=data)
 
         if response.status == 200:
@@ -113,7 +134,8 @@ class MirAIeAPI:
                 device_details = await self._get_device_details(device_id)
 
                 category = str(device_details["category"]).lower()
-                if category != "ac": continue
+                if category != "ac":
+                    continue
 
                 device_status = await self._get_device_status(device_id)
 
@@ -137,6 +159,7 @@ class MirAIeAPI:
                     area_name=space_name,
                 )
 
+                logger.info("Discovered device: %s (%s)", device.friendly_name, device.model_name)
                 self._topics.append(device.status_topic)
                 self._topics.append(device.connection_status_topic)
                 devices.append(device)
@@ -155,8 +178,6 @@ class MirAIeAPI:
         return json[0]
 
     async def _get_device_status(self, device_id: str):
-        status: DeviceStatus
-
         response = await self._http_session.get(
             STATUS_URL.replace("{deviceId}", device_id),
             headers=self._build_http_headers(),
@@ -184,8 +205,8 @@ class MirAIeAPI:
 
     def _build_http_headers(self):
         return {
-            "Authorization": f"Bearer {self._user.access_token}"
-            ,"Content-Type": "application/json",
+            "Authorization": f"Bearer {self._user.access_token}",
+            "Content-Type": "application/json",
         }
 
     def _get_scope(self):
