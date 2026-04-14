@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from py_miraie_ac.enums import (
+    Converti7Mode,
     DisplayState,
     FanMode,
     HVACMode,
@@ -174,3 +175,16 @@ def test_connection_event(sample_device):
     sample_device.on("connection_changed", handler)
     sample_device.connection_callback_handler({"onlineStatus": "false"})
     handler.assert_called_once_with(sample_device)
+
+
+def test_set_converti7_mode(sample_device, mock_broker):
+    sample_device.set_converti7_mode(Converti7Mode.HC)
+    mock_broker.set_converti7_mode.assert_called_once_with(
+        "home/device-001/control", Converti7Mode.HC
+    )
+
+
+def test_status_parses_converti7(sample_device):
+    from tests.conftest import SAMPLE_STATUS_JSON
+    sample_device.status_callback_handler(SAMPLE_STATUS_JSON)
+    assert sample_device.status.converti7_mode == Converti7Mode.OFF

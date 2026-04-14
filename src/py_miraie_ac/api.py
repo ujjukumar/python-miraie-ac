@@ -21,6 +21,7 @@ from .device import Device
 from .deviceStatus import DeviceStatus
 from .enums import (
     AuthType,
+    Converti7Mode,
     DisplayState,
     FanMode,
     HVACMode,
@@ -184,6 +185,12 @@ class MirAIeAPI:
         )
 
         json = await response.json()
+
+        try:
+            converti7 = Converti7Mode(json.get("cnv", 0))
+        except ValueError:
+            converti7 = Converti7Mode.OFF
+
         status = DeviceStatus(
             is_online=json["onlineStatus"] == "true",
             temperature=to_float(json["actmp"]),
@@ -199,6 +206,7 @@ class MirAIeAPI:
             else PresetMode.NONE,
             vertical_swing_mode=SwingMode(json["acvs"]),
             horizontal_swing_mode=SwingMode(json["achs"]),
+            converti7_mode=converti7,
         )
 
         return status

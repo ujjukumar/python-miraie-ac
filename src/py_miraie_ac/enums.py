@@ -52,3 +52,20 @@ class SwingMode(Enum):
     THREE = 3
     FOUR = 4
     FIVE = 5
+
+
+class Converti7Mode(Enum):
+    """The Converti7 (capacity control) enum.
+
+    Controls compressor capacity from 40% to 110%.
+    HC = Hyper Cooling (110%), FC = Full Cooling (100%).
+    Only works in COOL mode.
+    """
+    OFF = 0
+    CAPACITY_40 = 40
+    CAPACITY_55 = 55
+    CAPACITY_70 = 70
+    CAPACITY_80 = 80
+    CAPACITY_90 = 90
+    FC = 100
+    HC = 110

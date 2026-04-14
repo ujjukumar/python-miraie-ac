@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 from py_miraie_ac.broker import MirAIeBroker
 from py_miraie_ac.enums import (
+    Converti7Mode,
     DisplayState,
     FanMode,
     HVACMode,
@@ -250,3 +251,27 @@ def test_remove_callback(mock_client_cls):
     broker.register_callback("test/topic", cb)
     broker.remove_callback("test/topic")
     assert "test/topic" not in broker._callbacks
+
+
+@patch("py_miraie_ac.broker.paho.Client")
+def test_set_converti7_mode(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+
+    broker = MirAIeBroker()
+    broker.set_converti7_mode("topic/control", Converti7Mode.HC)
+
+    msg = json.loads(mock_client.publish.call_args[0][1])
+    assert msg["cnv"] == 110
+
+
+@patch("py_miraie_ac.broker.paho.Client")
+def test_set_converti7_mode_off(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+
+    broker = MirAIeBroker()
+    broker.set_converti7_mode("topic/control", Converti7Mode.OFF)
+
+    msg = json.loads(mock_client.publish.call_args[0][1])
+    assert msg["cnv"] == 0

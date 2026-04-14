@@ -6,7 +6,7 @@ from py_miraie_ac import (
     AuthType,
     MirAIeAPI,
 )
-from py_miraie_ac.enums import DisplayState, FanMode, HVACMode, PresetMode, SwingMode
+from py_miraie_ac.enums import Converti7Mode, DisplayState, FanMode, HVACMode, PresetMode, SwingMode
 
 config = configparser.ConfigParser()
 config.read("login_info.ini")
@@ -35,13 +35,18 @@ def show_status(device):
     print(SEPARATOR)
     print(f"  Power       : {s.power_mode.value}")
     print(f"  Temperature : {s.temperature}°C")
-    print(f"  Room Temp   : {s.room_temp}°C")
+    print(f"  Room Temp   : {s.room_temp}°C (sensor)")
+    if device.room_temp_offset != 0:
+        print(f"  Calibrated  : {s.calibrated_room_temp}°C (offset {device.room_temp_offset:+.1f}°C)")
+        compensate = "ON" if device.auto_compensate else "OFF"
+        print(f"  Auto Comp.  : {compensate}")
     print(f"  HVAC Mode   : {s.hvac_mode.value}")
     print(f"  Fan Mode    : {s.fan_mode.value}")
     print(f"  Preset      : {s.preset_mode.value}")
     print(f"  Display     : {s.display_state.value}")
     print(f"  V-Swing     : {s.vertical_swing_mode.name.lower()}")
     print(f"  H-Swing     : {s.horizontal_swing_mode.name.lower()}")
+    print(f"  Capacity    : {s.converti7_mode.name}")
     print(f"  Last Update : {s.last_updated}")
     print(SEPARATOR)
 
@@ -59,6 +64,9 @@ DEVICE_ACTIONS = [
     "Set boost mode",
     "Set vertical swing",
     "Set horizontal swing",
+    "Set capacity (Converti7)",
+    "Set room temp offset",
+    "Toggle auto-compensate",
     "Back to device list",
 ]
 
@@ -78,6 +86,8 @@ def handle_action(device, action):
             print("  -> Turned OFF")
 
         case "Set temperature":
+            if device.auto_compensate and device.room_temp_offset != 0:
+                print(f"  (Auto-compensate ON: offset {device.room_temp_offset:+.1f}°C)")
             while True:
                 raw = input("  Temperature (16-30): ").strip()
                 try:
@@ -133,6 +143,53 @@ def handle_action(device, action):
             choice = pick("Horizontal swing:", modes)
             device.set_horizontal_swing_mode(SwingMode[choice.upper()])
             print(f"  -> Horizontal swing set to {choice}")
+
+        case "Set capacity (Converti7)":
+            labels = {
+                Converti7Mode.OFF: "off",
+                Converti7Mode.CAPACITY_40: "40%",
+                Converti7Mode.CAPACITY_55: "55%",
+                Converti7Mode.CAPACITY_70: "70%",
+                Converti7Mode.CAPACITY_80: "80%",
+                Converti7Mode.CAPACITY_90: "90%",
+                Converti7Mode.FC: "100% (Full Cooling)",
+                Converti7Mode.HC: "110% (Hyper Cooling)",
+            }
+            options = list(labels.values())
+            modes = list(labels.keys())
+            print(f"  Current capacity: {labels[device.status.converti7_mode]}")
+            if device.status.hvac_mode != HVACMode.COOL:
+                print("  WARNING: Converti7 only works in COOL mode!")
+            choice = pick("Select capacity:", options)
+            selected = modes[options.index(choice)]
+            device.set_converti7_mode(selected)
+            print(f"  -> Capacity set to {choice}")
+
+        case "Set room temp offset":
+            print(f"  Current offset: {device.room_temp_offset:+.1f}°C")
+            print(f"  AC sensor reads: {device.status.room_temp}°C")
+            print("  If your actual room temp is lower, enter a negative value (e.g. -2)")
+            while True:
+                raw = input("  Offset in °C: ").strip()
+                try:
+                    offset = float(raw)
+                    device.room_temp_offset = offset
+                    print(f"  -> Offset set to {offset:+.1f}°C")
+                    print(f"  -> Calibrated room temp: {device.status.calibrated_room_temp}°C")
+                    break
+                except ValueError:
+                    print("  Enter a valid number (e.g. -2, -1.5, 0)")
+
+        case "Toggle auto-compensate":
+            if device.room_temp_offset == 0:
+                print("  Set a room temp offset first!")
+            else:
+                new_state = not device.auto_compensate
+                device.auto_compensate = new_state
+                state = "ON" if new_state else "OFF"
+                print(f"  -> Auto-compensate: {state}")
+                if new_state:
+                    print(f"     set_temperature() will now adjust by {-device.room_temp_offset:+.1f}°C")
 
         case "Back to device list":
             return False

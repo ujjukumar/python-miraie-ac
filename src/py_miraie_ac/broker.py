@@ -10,7 +10,7 @@ from collections.abc import Callable
 from paho.mqtt import client as paho
 
 from .constants import MQTT_HOST, MQTT_PORT
-from .enums import DisplayState, FanMode, HVACMode, PowerMode, PresetMode, SwingMode
+from .enums import Converti7Mode, DisplayState, FanMode, HVACMode, PowerMode, PresetMode, SwingMode
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +137,12 @@ class MirAIeBroker:
         self._client.publish(topic, message)
         logger.debug("Published horizontal swing %s to %s", value.value, topic)
 
+    def set_converti7_mode(self, topic: str, value: Converti7Mode):
+        """Sets the Converti7 (capacity) mode. Only works in COOL mode."""
+        message = self._build_converti7_mode_message(value)
+        self._client.publish(topic, message)
+        logger.debug("Published converti7 mode %s to %s", value.value, topic)
+
     def _generate_client_id(self):
         return (
             f"an{self._generate_random_number(16)}{self._generate_random_number(5)}"
@@ -241,6 +247,11 @@ class MirAIeBroker:
     def _build_horizontal_swing_mode_message(self, mode: SwingMode):
         message = self._build_base_message()
         message["achs"] = mode.value
+        return json.dumps(message)
+
+    def _build_converti7_mode_message(self, mode: Converti7Mode):
+        message = self._build_base_message()
+        message["cnv"] = mode.value
         return json.dumps(message)
 
     def _build_base_message(self):

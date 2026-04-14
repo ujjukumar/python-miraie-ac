@@ -9,7 +9,7 @@ from datetime import UTC
 from .broker import MirAIeBroker
 from .constants import MAX_TEMPERATURE, MIN_TEMPERATURE
 from .deviceStatus import DeviceStatus
-from .enums import DisplayState, FanMode, HVACMode, PowerMode, PresetMode, SwingMode
+from .enums import Converti7Mode, DisplayState, FanMode, HVACMode, PowerMode, PresetMode, SwingMode
 from .utils import to_float
 
 logger = logging.getLogger(__name__)
@@ -62,10 +62,44 @@ class Device:
         self._broker = broker
         self._callbacks = []
         self._event_handlers = {}
+        self._room_temp_offset: float = 0.0
+        self._auto_compensate: bool = False
         self._broker.register_callback(self.status_topic, self.status_callback_handler)
         self._broker.register_callback(
             self.connection_status_topic, self.connection_callback_handler
         )
+
+    @property
+    def room_temp_offset(self) -> float:
+        """Returns the current room temperature offset in °C"""
+        return self._room_temp_offset
+
+    @room_temp_offset.setter
+    def room_temp_offset(self, offset: float):
+        """Sets a room temperature calibration offset in °C.
+
+        If the AC reads higher than actual, use a negative value (e.g. -2.0).
+        The offset is applied to status.calibrated_room_temp and, when
+        auto_compensate is enabled, to set_temperature() as well.
+        """
+        self._room_temp_offset = offset
+        self.status._room_temp_offset = offset
+        logger.info("Room temp offset for %s set to %+.1f°C", self.friendly_name, offset)
+
+    @property
+    def auto_compensate(self) -> bool:
+        """Whether set_temperature() auto-adjusts for the sensor offset.
+
+        When True and offset is -2°C, calling set_temperature(24) actually
+        sends 26°C to the AC so the real room temperature reaches 24°C.
+        """
+        return self._auto_compensate
+
+    @auto_compensate.setter
+    def auto_compensate(self, enabled: bool):
+        self._auto_compensate = enabled
+        state = "enabled" if enabled else "disabled"
+        logger.info("Auto temperature compensation %s for %s", state, self.friendly_name)
 
     def _publish_state(self):
         for callback in self._callbacks:
@@ -90,6 +124,7 @@ class Device:
     def status_callback_handler(self, status: dict):
         """Handles MQTT messages received on the status topic"""
         self.status = self._parse_status_response(status)
+        self.status._room_temp_offset = self._room_temp_offset
         self._publish_state()
         self._emit("status_changed")
 
@@ -97,6 +132,11 @@ class Device:
         is_online = self.status.is_online
         if "onlineStatus" in json:
             is_online = json["onlineStatus"] == "true"
+
+        try:
+            converti7 = Converti7Mode(json.get("cnv", 0))
+        except ValueError:
+            converti7 = Converti7Mode.OFF
 
         device_status = DeviceStatus(
             is_online=is_online,
@@ -113,6 +153,7 @@ class Device:
             else PresetMode.NONE,
             vertical_swing_mode=SwingMode(json["acvs"]),
             horizontal_swing_mode=SwingMode(json["achs"]),
+            converti7_mode=converti7,
         )
 
         return device_status
@@ -131,13 +172,29 @@ class Device:
             logger.warning("Sending '%s' to offline device %s", action, self.friendly_name)
 
     def set_temperature(self, temp: float):
-        """Sets the temperature (must be between 16.0 and 30.0)"""
+        """Sets the desired room temperature (16.0-30.0°C).
+
+        When auto_compensate is enabled, the value sent to the AC is adjusted
+        to account for the sensor offset so the room actually reaches the
+        requested temperature.
+        """
         if temp < MIN_TEMPERATURE or temp > MAX_TEMPERATURE:
             raise ValueError(
                 f"Temperature must be between {MIN_TEMPERATURE} and {MAX_TEMPERATURE}, got {temp}"
             )
         self._warn_if_offline("set_temperature")
-        self._broker.set_temperature(self.control_topic, temp)
+
+        actual_temp = temp
+        if self._auto_compensate and self._room_temp_offset != 0:
+            # offset is negative when AC reads high, so subtract it to increase the target
+            actual_temp = round(temp - self._room_temp_offset, 1)
+            actual_temp = max(MIN_TEMPERATURE, min(MAX_TEMPERATURE, actual_temp))
+            logger.info(
+                "Compensating: desired %.1f°C → sending %.1f°C (offset %+.1f°C)",
+                temp, actual_temp, self._room_temp_offset,
+            )
+
+        self._broker.set_temperature(self.control_topic, actual_temp)
 
     def turn_on(self):
         """Turns on the device"""
@@ -188,6 +245,17 @@ class Device:
         """Sets the horizontal swing mode"""
         self._warn_if_offline("set_horizontal_swing_mode")
         self._broker.set_horizontal_swing_mode(self.control_topic, mode)
+
+    def set_converti7_mode(self, mode: Converti7Mode):
+        """Sets the Converti7 (capacity) mode.
+
+        Controls compressor capacity from 40% to 110%.
+        Only works when HVAC mode is COOL.
+        """
+        self._warn_if_offline("set_converti7_mode")
+        if self.status.hvac_mode != HVACMode.COOL:
+            logger.warning("Converti7 only works in COOL mode (current: %s)", self.status.hvac_mode.value)
+        self._broker.set_converti7_mode(self.control_topic, mode)
 
     def register_callback(self, callback: Callable[[], None]) -> None:
         """Registers a callback function"""

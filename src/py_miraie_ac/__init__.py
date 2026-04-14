@@ -6,6 +6,9 @@ from py_miraie_ac.enums import (
     AuthType as AuthType,
 )
 from py_miraie_ac.enums import (
+    Converti7Mode as Converti7Mode,
+)
+from py_miraie_ac.enums import (
     DisplayState as DisplayState,
 )
 from py_miraie_ac.enums import (

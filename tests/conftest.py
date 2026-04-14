@@ -28,6 +28,7 @@ SAMPLE_STATUS_JSON = {
     "acpm": "off",
     "acvs": 0,
     "achs": 0,
+    "cnv": 0,
 }
 
 SAMPLE_LOGIN_RESPONSE = {
