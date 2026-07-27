@@ -4,9 +4,11 @@ import argparse
 import asyncio
 import configparser
 import sys
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from .api import MirAIeAPI
+from .device import Device
 from .enums import AuthType, DisplayState, FanMode, HVACMode, SwingMode
 
 CONFIG_DIR = Path.home() / ".config" / "miraie"
@@ -20,7 +22,7 @@ def _load_config() -> configparser.ConfigParser:
     return config
 
 
-def _save_config(config: configparser.ConfigParser):
+def _save_config(config: configparser.ConfigParser) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     with open(CONFIG_FILE, "w") as f:
         config.write(f)
@@ -38,14 +40,14 @@ def _get_api_from_config() -> tuple[AuthType, str, str]:
     return auth_type, login_id, password
 
 
-async def _run_with_api(func):
+async def _run_with_api(func: Callable[[MirAIeAPI], Awaitable[None]]) -> None:
     auth_type, login_id, password = _get_api_from_config()
     async with MirAIeAPI(auth_type=auth_type, login_id=login_id, password=password) as api:
         await api.initialize()
         await func(api)
 
 
-def cmd_login(args):
+def cmd_login(args: argparse.Namespace) -> None:
     """Store credentials in config file"""
     config = _load_config()
     config["login"] = {
@@ -57,9 +59,9 @@ def cmd_login(args):
     print(f"Credentials saved to {CONFIG_FILE}")
 
 
-def cmd_devices(args):
+def cmd_devices(args: argparse.Namespace) -> None:
     """List all devices"""
-    async def _list(api: MirAIeAPI):
+    async def _list(api: MirAIeAPI) -> None:
         for device in api.devices:
             online = "online" if device.status.is_online else "offline"
             print(f"  {device.friendly_name} ({device.model_name}) [{online}]")
@@ -73,9 +75,9 @@ def cmd_devices(args):
     asyncio.run(_run_with_api(_list))
 
 
-def cmd_status(args):
+def cmd_status(args: argparse.Namespace) -> None:
     """Show detailed status for a device"""
-    async def _status(api: MirAIeAPI):
+    async def _status(api: MirAIeAPI) -> None:
         device = _find_device(api, args.device)
         if device is None:
             return
@@ -96,9 +98,9 @@ def cmd_status(args):
     asyncio.run(_run_with_api(_status))
 
 
-def cmd_set(args):
+def cmd_set(args: argparse.Namespace) -> None:
     """Set device parameters"""
-    async def _set(api: MirAIeAPI):
+    async def _set(api: MirAIeAPI) -> None:
         device = _find_device(api, args.device)
         if device is None:
             return
@@ -138,9 +140,9 @@ def cmd_set(args):
     asyncio.run(_run_with_api(_set))
 
 
-def cmd_on(args):
+def cmd_on(args: argparse.Namespace) -> None:
     """Turn on a device"""
-    async def _on(api: MirAIeAPI):
+    async def _on(api: MirAIeAPI) -> None:
         device = _find_device(api, args.device)
         if device is None:
             return
@@ -150,9 +152,9 @@ def cmd_on(args):
     asyncio.run(_run_with_api(_on))
 
 
-def cmd_off(args):
+def cmd_off(args: argparse.Namespace) -> None:
     """Turn off a device"""
-    async def _off(api: MirAIeAPI):
+    async def _off(api: MirAIeAPI) -> None:
         device = _find_device(api, args.device)
         if device is None:
             return
@@ -162,7 +164,7 @@ def cmd_off(args):
     asyncio.run(_run_with_api(_off))
 
 
-def _find_device(api: MirAIeAPI, name: str):
+def _find_device(api: MirAIeAPI, name: str) -> Device | None:
     """Find a device by name (case-insensitive partial match)"""
     name_lower = name.lower()
     for device in api.devices:
@@ -175,7 +177,7 @@ def _find_device(api: MirAIeAPI, name: str):
     return None
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         prog="miraie",
         description="Control MirAIe air conditioners by Panasonic",

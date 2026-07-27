@@ -4,6 +4,8 @@ HTTP_CLIENT_ID = "PBcMcfG19njNCL8AOgvRzIC8AjQa"
 LOGIN_URL = "https://auth.miraie.in/simplifi/v1/userManagement/login"
 HOMES_URL = "https://app.miraie.in/simplifi/v1/homeManagement/homes"
 STATUS_URL = "https://app.miraie.in/simplifi/v1/deviceManagement/devices/{deviceId}/mobile/status"
+# NOTE: the literal "deviceId" segment is required by the MirAIe API. The actual
+# request path is ".../devices/deviceId/{device_id}"; removing it returns HTTP 404.
 DEVICE_DETAILS_URL = "https://app.miraie.in/simplifi/v1/deviceManagement/devices/deviceId"
 
 MQTT_HOST = "mqtt.miraie.in"

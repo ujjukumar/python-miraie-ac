@@ -160,3 +160,4 @@ cython_debug/
 #.idea/
 test.py
 login_info.ini
+example/AC Control.bat

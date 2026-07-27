@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from datetime import UTC
+from datetime import UTC, datetime
+from typing import Any
 
 from .broker import MirAIeBroker
 from .constants import MAX_TEMPERATURE, MIN_TEMPERATURE
@@ -19,8 +20,8 @@ class Device:
     """The MirAIe device class"""
 
     _broker: MirAIeBroker
-    _callbacks: list[Callable]
-    _event_handlers: dict[str, list[Callable]]
+    _callbacks: list[Callable[[], None]]
+    _event_handlers: dict[str, list[Callable[[Device], None]]]
 
     def __init__(
         self,
@@ -41,7 +42,7 @@ class Device:
         status: DeviceStatus,
         broker: MirAIeBroker,
         area_name: str,
-    ):
+    ) -> None:
         self.device_id = device_id
         self.name = name
         self.friendly_name = friendly_name
@@ -75,7 +76,7 @@ class Device:
         return self._room_temp_offset
 
     @room_temp_offset.setter
-    def room_temp_offset(self, offset: float):
+    def room_temp_offset(self, offset: float) -> None:
         """Sets a room temperature calibration offset in °C.
 
         If the AC reads higher than actual, use a negative value (e.g. -2.0).
@@ -96,39 +97,39 @@ class Device:
         return self._auto_compensate
 
     @auto_compensate.setter
-    def auto_compensate(self, enabled: bool):
+    def auto_compensate(self, enabled: bool) -> None:
         self._auto_compensate = enabled
         state = "enabled" if enabled else "disabled"
         logger.info("Auto temperature compensation %s for %s", state, self.friendly_name)
 
-    def _publish_state(self):
+    def _publish_state(self) -> None:
         for callback in self._callbacks:
             callback()
 
-    def _emit(self, event: str):
+    def _emit(self, event: str) -> None:
         for handler in self._event_handlers.get(event, []):
             handler(self)
 
-    def on(self, event: str, handler: Callable) -> None:
+    def on(self, event: str, handler: Callable[[Device], None]) -> None:
         """Registers an event handler. Supported events: 'status_changed', 'connection_changed'"""
         if event not in self._event_handlers:
             self._event_handlers[event] = []
         self._event_handlers[event].append(handler)
 
-    def off(self, event: str, handler: Callable) -> None:
+    def off(self, event: str, handler: Callable[[Device], None]) -> None:
         """Removes a previously registered event handler"""
         handlers = self._event_handlers.get(event, [])
         if handler in handlers:
             handlers.remove(handler)
 
-    def status_callback_handler(self, status: dict):
+    def status_callback_handler(self, status: dict[str, Any]) -> None:
         """Handles MQTT messages received on the status topic"""
         self.status = self._parse_status_response(status)
         self.status._room_temp_offset = self._room_temp_offset
         self._publish_state()
         self._emit("status_changed")
 
-    def _parse_status_response(self, json: dict) -> DeviceStatus:
+    def _parse_status_response(self, json: dict[str, Any]) -> DeviceStatus:
         is_online = self.status.is_online
         if "onlineStatus" in json:
             is_online = json["onlineStatus"] == "true"
@@ -158,20 +159,19 @@ class Device:
 
         return device_status
 
-    def connection_callback_handler(self, status: dict):
+    def connection_callback_handler(self, status: dict[str, Any]) -> None:
         """Handles MQTT messages received on the connection status topic"""
         if "onlineStatus" in status:
             self.status.is_online = status["onlineStatus"] == "true"
-            from datetime import datetime
             self.status.last_updated = datetime.now(UTC)
             self._publish_state()
             self._emit("connection_changed")
 
-    def _warn_if_offline(self, action: str):
+    def _warn_if_offline(self, action: str) -> None:
         if not self.status.is_online:
             logger.warning("Sending '%s' to offline device %s", action, self.friendly_name)
 
-    def set_temperature(self, temp: float):
+    def set_temperature(self, temp: float) -> None:
         """Sets the desired room temperature (16.0-30.0°C).
 
         When auto_compensate is enabled, the value sent to the AC is adjusted
@@ -196,57 +196,57 @@ class Device:
 
         self._broker.set_temperature(self.control_topic, actual_temp)
 
-    def turn_on(self):
+    def turn_on(self) -> None:
         """Turns on the device"""
         self._warn_if_offline("turn_on")
         self._broker.set_power(self.control_topic, PowerMode.ON)
 
-    def turn_off(self):
+    def turn_off(self) -> None:
         """Turns off the device"""
         self._warn_if_offline("turn_off")
         self._broker.set_power(self.control_topic, PowerMode.OFF)
 
-    def set_hvac_mode(self, mode: HVACMode):
+    def set_hvac_mode(self, mode: HVACMode) -> None:
         """Sets the HVAC mode"""
         self._warn_if_offline("set_hvac_mode")
         self._broker.set_hvac_mode(self.control_topic, mode)
 
-    def set_fan_mode(self, mode: FanMode):
+    def set_fan_mode(self, mode: FanMode) -> None:
         """Sets the fan mode"""
         self._warn_if_offline("set_fan_mode")
         self._broker.set_fan_mode(self.control_topic, mode)
 
-    def set_preset_mode(self, mode: PresetMode):
+    def set_preset_mode(self, mode: PresetMode) -> None:
         """Sets the preset mode"""
         self._warn_if_offline("set_preset_mode")
         self._broker.set_preset_mode(self.control_topic, mode)
 
-    def set_display_state(self, state: DisplayState):
+    def set_display_state(self, state: DisplayState) -> None:
         """Sets the display state (on/off)"""
         self._warn_if_offline("set_display_state")
         self._broker.set_display_state(self.control_topic, state)
 
-    def set_eco_mode(self, enabled: bool):
+    def set_eco_mode(self, enabled: bool) -> None:
         """Enables or disables eco mode without changing temperature"""
         self._warn_if_offline("set_eco_mode")
         self._broker.set_eco_mode(self.control_topic, enabled)
 
-    def set_boost_mode(self, enabled: bool):
+    def set_boost_mode(self, enabled: bool) -> None:
         """Enables or disables boost mode"""
         self._warn_if_offline("set_boost_mode")
         self._broker.set_boost_mode(self.control_topic, enabled)
 
-    def set_vertical_swing_mode(self, mode: SwingMode):
+    def set_vertical_swing_mode(self, mode: SwingMode) -> None:
         """Sets the vertical swing mode"""
         self._warn_if_offline("set_vertical_swing_mode")
         self._broker.set_vertical_swing_mode(self.control_topic, mode)
 
-    def set_horizontal_swing_mode(self, mode: SwingMode):
+    def set_horizontal_swing_mode(self, mode: SwingMode) -> None:
         """Sets the horizontal swing mode"""
         self._warn_if_offline("set_horizontal_swing_mode")
         self._broker.set_horizontal_swing_mode(self.control_topic, mode)
 
-    def set_converti7_mode(self, mode: Converti7Mode):
+    def set_converti7_mode(self, mode: Converti7Mode) -> None:
         """Sets the Converti7 (capacity) mode.
 
         Controls compressor capacity from 40% to 110%.

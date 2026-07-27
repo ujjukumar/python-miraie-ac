@@ -11,7 +11,8 @@ class Home:
         self.home_id = home_id
         self.devices = dict((d.device_id, d) for d in devices)
 
-    def get_device(self, device_id: str):
+    def get_device(self, device_id: str) -> Device | None:
         """Gets a device by its ID"""
         if device_id in self.devices:
             return self.devices[device_id]
+        return None

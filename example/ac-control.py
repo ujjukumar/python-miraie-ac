@@ -1,5 +1,6 @@
 import asyncio
 import configparser
+from pathlib import Path
 
 from py_miraie_ac import (
     AuthException,
@@ -8,10 +9,29 @@ from py_miraie_ac import (
 )
 from py_miraie_ac.enums import Converti7Mode, DisplayState, FanMode, HVACMode, PresetMode, SwingMode
 
-config = configparser.ConfigParser()
-config.read("login_info.ini")
+CONFIG_FILE = Path(__file__).resolve().parent.parent / "login_info.ini"
 
 SEPARATOR = "-" * 50
+
+
+def load_credentials() -> tuple[str, str]:
+    """Read the mobile number and password from login_info.ini."""
+    if not CONFIG_FILE.exists():
+        print(f"Config file not found: {CONFIG_FILE}")
+        print("Create it with the following contents:\n")
+        print("[login]")
+        print("username = YOUR_MOBILE_NUMBER")
+        print("password = YOUR_PASSWORD")
+        raise SystemExit(1)
+
+    config = configparser.ConfigParser()
+    config.read(CONFIG_FILE)
+    try:
+        return config["login"]["username"], config["login"]["password"]
+    except KeyError as exc:
+        print(f"Missing {exc} in {CONFIG_FILE}.")
+        print("Expected a [login] section with 'username' and 'password' keys.")
+        raise SystemExit(1) from None
 
 
 def pick(prompt, options):
@@ -198,10 +218,11 @@ def handle_action(device, action):
 
 
 async def main():
+    username, password = load_credentials()
     async with MirAIeAPI(
         auth_type=AuthType.MOBILE,
-        login_id=config["login"]["username"],
-        password=config["login"]["password"],
+        login_id=username,
+        password=password,
     ) as api:
         try:
             await api.initialize()
@@ -237,4 +258,8 @@ async def main():
                     break
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nBye!")

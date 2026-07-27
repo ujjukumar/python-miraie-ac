@@ -5,6 +5,7 @@ import logging
 import math
 import random
 from collections.abc import Callable
+from typing import Any
 
 import aiohttp
 
@@ -46,7 +47,7 @@ class MirAIeAPI:
     _http_session: aiohttp.ClientSession
     _user: User
     _home: Home
-    _topics: list[str] = []
+    _topics: list[str]
     _broker: MirAIeBroker
     _timeout: aiohttp.ClientTimeout
 
@@ -59,18 +60,19 @@ class MirAIeAPI:
         self._auth_type = str(auth_type.value)
         self._login_id = login_id
         self._password = password
+        self._topics = []
         self._timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT_SECONDS)
         self._http_session = aiohttp.ClientSession(timeout=self._timeout)
         self._broker = MirAIeBroker()
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "MirAIeAPI":
         return self
 
-    async def __aexit__(self, *excinfo):
+    async def __aexit__(self, *excinfo: object) -> None:
         await self._http_session.close()
         self._broker.disconnect()
 
-    async def initialize(self):
+    async def initialize(self) -> None:
         """Initializes the MirAIe API"""
         self._user = await self._login()
         logger.info("Logged in as user %s", self._user.user_id)
@@ -82,7 +84,7 @@ class MirAIeAPI:
         self._broker.init_broker(self._home.home_id, self._user.access_token, self.reconnect_broker)
         self._broker.connect()
 
-    def reconnect_broker(self, reconnect_callback: Callable):
+    def reconnect_broker(self, reconnect_callback: Callable[..., None]) -> None:
         """Authenticates with MirAIe and reconnects to MQTT server with the new credentials"""
         loop = self._http_session.loop
         fut = asyncio.run_coroutine_threadsafe(self._login(), loop)
@@ -91,7 +93,7 @@ class MirAIeAPI:
         logger.info("Re-authenticated for MQTT reconnect")
         reconnect_callback(self._home.home_id, self._user.access_token)
 
-    async def _login(self):
+    async def _login(self) -> User:
         data = {
             "clientId": HTTP_CLIENT_ID,
             "password": self._password,
@@ -117,14 +119,14 @@ class MirAIeAPI:
         else:
             raise ConnectionException(await response.json())
 
-    async def _get_home_details(self):
+    async def _get_home_details(self) -> Home:
         response = await self._http_session.get(
             HOMES_URL, headers=self._build_http_headers()
         )
         resp = await response.json()
         return await self._parse_home_details(resp[0])
 
-    async def _parse_home_details(self, json_response):
+    async def _parse_home_details(self, json_response: dict[str, Any]) -> Home:
         devices: list[Device] = []
 
         for space in json_response["spaces"]:
@@ -167,7 +169,7 @@ class MirAIeAPI:
 
         return Home(home_id=json_response["homeId"], devices=devices)
 
-    async def _get_device_details(self, device_id: str):
+    async def _get_device_details(self, device_id: str) -> dict[str, Any]:
         url = f"{DEVICE_DETAILS_URL}/{device_id}"
 
         response = await self._http_session.get(
@@ -176,9 +178,10 @@ class MirAIeAPI:
         )
 
         json = await response.json()
-        return json[0]
+        details: dict[str, Any] = json[0]
+        return details
 
-    async def _get_device_status(self, device_id: str):
+    async def _get_device_status(self, device_id: str) -> DeviceStatus:
         response = await self._http_session.get(
             STATUS_URL.replace("{deviceId}", device_id),
             headers=self._build_http_headers(),
@@ -211,12 +214,12 @@ class MirAIeAPI:
 
         return status
 
-    def _build_http_headers(self):
+    def _build_http_headers(self) -> dict[str, str]:
         return {
             "Authorization": f"Bearer {self._user.access_token}",
             "Content-Type": "application/json",
         }
 
-    def _get_scope(self):
+    def _get_scope(self) -> str:
         rnd = math.floor(random.random() * 1000000000)
         return f"an{str(rnd)}"

@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **Shared mutable state**: `MirAIeAPI._topics` and `MirAIeBroker._topics`/`_callbacks` were class-level mutable defaults shared across instances; they are now initialized per instance
+- **Import placement**: Moved a `datetime` import out of `Device.connection_callback_handler` to the module level
+
+### Changed
+- **Full type coverage**: Added missing type annotations across `api`, `broker`, `device`, `cli`, and `home` so the package passes `mypy --strict` (was 133 errors)
+
 ## [1.0.0] - 2026-04-14
 
 ### Breaking Changes
@@ -26,7 +35,6 @@
 - **Typed configuration**: ruff, mypy, and pytest configs in pyproject.toml
 
 ### Fixed
-- **Device details URL bug**: `DEVICE_DETAILS_URL` had a literal `/deviceId` in the path
 - **MQTT callback crash**: `_on_mqtt_message_received` crashed when no callback was registered for a topic
 - **Bare except**: `utils.to_float()` now catches only `ValueError`/`TypeError` instead of all exceptions
 - **MQTT protocol**: Upgraded from MQTTv3.1 to MQTTv3.1.1 for better compatibility
