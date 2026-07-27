@@ -12,6 +12,7 @@ import aiohttp
 from .broker import MirAIeBroker
 from .constants import (
     DEVICE_DETAILS_URL,
+    ENERGY_CONSUMPTION_URL,
     HOMES_URL,
     HTTP_CLIENT_ID,
     HTTP_TIMEOUT_SECONDS,
@@ -22,6 +23,7 @@ from .device import Device
 from .deviceStatus import DeviceStatus
 from .enums import (
     AuthType,
+    ConsumptionPeriodType,
     Converti7Mode,
     DisplayState,
     FanMode,
@@ -206,6 +208,8 @@ class MirAIeAPI:
             if json["acpm"] == "on"
             else PresetMode.ECO
             if json["acem"] == "on"
+            else PresetMode.CLEAN
+            if json.get("acec") == "on"
             else PresetMode.NONE,
             vertical_swing_mode=SwingMode(json["acvs"]),
             horizontal_swing_mode=SwingMode(json["achs"]),
@@ -213,6 +217,43 @@ class MirAIeAPI:
         )
 
         return status
+
+    async def get_energy_consumption(
+        self,
+        device: Device,
+        period_type: ConsumptionPeriodType,
+        from_date: str,
+        to_date: str | None = None,
+    ) -> dict[str, float]:
+        """Fetches energy consumption (in kWh) for a device over a date range.
+
+        Args:
+            device: The device to query.
+            period_type: The reporting granularity, which also dictates the
+                date format:
+                - ``DAILY``/``WEEKLY``: dates as ``"DDMMYYYY"`` (weekly dates
+                  must fall on a Sunday).
+                - ``MONTHLY``: dates as ``"MMYYYY"``.
+            from_date: Start of the range.
+            to_date: End of the range. Defaults to ``from_date`` (single point).
+
+        Returns:
+            A mapping of date key to energy consumption in kWh, e.g.
+            ``{"30032025": 2.35, "31032025": 3.64}``.
+        """
+        if to_date is None:
+            to_date = from_date
+
+        url = ENERGY_CONSUMPTION_URL.format(
+            deviceId=device.device_id,
+            periodType=period_type.value,
+            fromDate=from_date,
+            toDate=to_date,
+        )
+        response = await self._http_session.get(url, headers=self._build_http_headers())
+        resp = await response.json()
+        key = period_type.response_key()
+        return {entry[key]: entry["power"] for entry in resp}
 
     def _build_http_headers(self) -> dict[str, str]:
         return {

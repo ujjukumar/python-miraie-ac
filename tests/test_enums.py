@@ -2,6 +2,7 @@
 
 from py_miraie_ac.enums import (
     AuthType,
+    ConsumptionPeriodType,
     Converti7Mode,
     DisplayState,
     FanMode,
@@ -47,6 +48,7 @@ def test_preset_mode_values():
     assert PresetMode.NONE.value == "none"
     assert PresetMode.ECO.value == "eco"
     assert PresetMode.BOOST.value == "boost"
+    assert PresetMode.CLEAN.value == "clean"
 
 
 def test_swing_mode_values():
@@ -75,3 +77,20 @@ def test_converti7_mode_from_value():
     assert Converti7Mode(0) == Converti7Mode.OFF
     assert Converti7Mode(110) == Converti7Mode.HC
     assert SwingMode(3) == SwingMode.THREE
+
+
+def test_converti7_mode_not_supported():
+    assert Converti7Mode.NS.value == 1
+    assert Converti7Mode(1) == Converti7Mode.NS
+
+
+def test_consumption_period_type_values():
+    assert ConsumptionPeriodType.DAILY.value == "Daily"
+    assert ConsumptionPeriodType.WEEKLY.value == "Weekly"
+    assert ConsumptionPeriodType.MONTHLY.value == "Monthly"
+
+
+def test_consumption_period_response_key():
+    assert ConsumptionPeriodType.DAILY.response_key() == "day"
+    assert ConsumptionPeriodType.WEEKLY.response_key() == "week"
+    assert ConsumptionPeriodType.MONTHLY.response_key() == "month"

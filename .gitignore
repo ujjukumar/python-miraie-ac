@@ -161,4 +161,5 @@ cython_debug/
 test.py
 login_info.ini
 .ac_control_prefs.json
+.ac_energy_history.json
 example/AC Control.bat

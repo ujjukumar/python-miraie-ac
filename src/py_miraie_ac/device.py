@@ -151,6 +151,8 @@ class Device:
             if json["acpm"] == "on"
             else PresetMode.ECO
             if json["acem"] == "on"
+            else PresetMode.CLEAN
+            if json.get("acec") == "on"
             else PresetMode.NONE,
             vertical_swing_mode=SwingMode(json["acvs"]),
             horizontal_swing_mode=SwingMode(json["achs"]),

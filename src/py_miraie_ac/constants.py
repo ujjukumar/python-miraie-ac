@@ -7,6 +7,10 @@ STATUS_URL = "https://app.miraie.in/simplifi/v1/deviceManagement/devices/{device
 # NOTE: the literal "deviceId" segment is required by the MirAIe API. The actual
 # request path is ".../devices/deviceId/{device_id}"; removing it returns HTTP 404.
 DEVICE_DETAILS_URL = "https://app.miraie.in/simplifi/v1/deviceManagement/devices/deviceId"
+ENERGY_CONSUMPTION_URL = (
+    "https://app.miraie.in/simplifi/v1/powerConsumption/devices/{deviceId}"
+    "?grain={periodType}&startDate={fromDate}&endDate={toDate}"
+)
 
 MQTT_HOST = "mqtt.miraie.in"
 MQTT_PORT = 8883

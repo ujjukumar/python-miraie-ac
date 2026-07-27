@@ -42,6 +42,7 @@ class PresetMode(Enum):
     NONE = "none"
     ECO = "eco"
     BOOST = "boost"
+    CLEAN = "clean"
 
 
 class SwingMode(Enum):
@@ -69,3 +70,20 @@ class Converti7Mode(Enum):
     CAPACITY_90 = 90
     FC = 100
     HC = 110
+    # Reported by some units when Converti7 is unavailable/not supported.
+    NS = 1
+
+
+class ConsumptionPeriodType(Enum):
+    """The energy-consumption reporting period."""
+    DAILY = "Daily"
+    WEEKLY = "Weekly"
+    MONTHLY = "Monthly"
+
+    def response_key(self) -> str:
+        """Returns the JSON key used for this period in the API response."""
+        return {
+            ConsumptionPeriodType.DAILY: "day",
+            ConsumptionPeriodType.WEEKLY: "week",
+            ConsumptionPeriodType.MONTHLY: "month",
+        }[self]

@@ -226,12 +226,19 @@ class MirAIeBroker:
         if mode == PresetMode.NONE:
             message["acem"] = "off"
             message["acpm"] = "off"
+            message["acec"] = "off"
         elif mode == PresetMode.ECO:
             message["acem"] = "on"
             message["acpm"] = "off"
+            message["acec"] = "off"
         elif mode == PresetMode.BOOST:
             message["acem"] = "off"
             message["acpm"] = "on"
+            message["acec"] = "off"
+        elif mode == PresetMode.CLEAN:
+            message["acem"] = "off"
+            message["acpm"] = "off"
+            message["acec"] = "on"
         return json.dumps(message)
 
     def _build_display_state_message(self, state: DisplayState) -> str:

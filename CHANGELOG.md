@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+- **Energy consumption**: `MirAIeAPI.get_energy_consumption(device, period_type, from_date, to_date)` returns a `{date: kWh}` mapping for daily/weekly/monthly ranges, plus a new `ConsumptionPeriodType` enum
+- **CLEAN preset mode**: `PresetMode.CLEAN` is now sent (via `acec`) and parsed from device status
+- **Converti7 "not supported"**: `Converti7Mode.NS` represents units that report Converti7 as unavailable (`cnv=1`) instead of silently mapping to `OFF`
+
 ### Fixed
 - **Shared mutable state**: `MirAIeAPI._topics` and `MirAIeBroker._topics`/`_callbacks` were class-level mutable defaults shared across instances; they are now initialized per instance
 - **Import placement**: Moved a `datetime` import out of `Device.connection_callback_handler` to the module level

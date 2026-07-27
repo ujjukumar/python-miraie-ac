@@ -148,6 +148,21 @@ def test_set_preset_none(mock_client_cls):
     msg = json.loads(mock_client.publish.call_args[0][1])
     assert msg["acem"] == "off"
     assert msg["acpm"] == "off"
+    assert msg["acec"] == "off"
+
+
+@patch("py_miraie_ac.broker.paho.Client")
+def test_set_preset_clean(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+
+    broker = MirAIeBroker()
+    broker.set_preset_mode("topic/control", PresetMode.CLEAN)
+
+    msg = json.loads(mock_client.publish.call_args[0][1])
+    assert msg["acem"] == "off"
+    assert msg["acpm"] == "off"
+    assert msg["acec"] == "on"
 
 
 @patch("py_miraie_ac.broker.paho.Client")
