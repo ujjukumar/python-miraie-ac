@@ -30,6 +30,7 @@ import contextlib
 import hmac
 import logging
 import signal
+import time
 from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -296,12 +297,23 @@ async function refresh() {
   catch (e) { msg(e.message, true); }
 }
 
+function localizeLogLine(line) {
+  const sp = line.indexOf(' ');
+  if (sp <= 0) return line;
+  const d = new Date(line.slice(0, sp));
+  if (isNaN(d.getTime())) return line;
+  const p = (n) => String(n).padStart(2, '0');
+  const local = d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
+    + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+  return local + line.slice(sp);
+}
+
 async function refreshLogs() {
   try {
     const r = await api('/logs');
     const pre = $('logs');
     const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 12;
-    pre.textContent = (r.lines || []).join('\n');
+    pre.textContent = (r.lines || []).map(localizeLogLine).join('\n');
     if (atBottom) pre.scrollTop = pre.scrollHeight;
   } catch (e) { /* ignore log fetch errors */ }
 }
@@ -683,7 +695,11 @@ async def main() -> None:
     log_format = "%(asctime)s %(levelname)s %(name)s: %(message)s"
     logging.basicConfig(level=logging.INFO, format=log_format)
     buffer_handler = _BufferLogHandler()
-    buffer_handler.setFormatter(logging.Formatter(log_format))
+    # Emit UTC ISO-8601 timestamps into the buffer so the web UI can convert
+    # them to each viewer's local time (the console/journal stays VM-local).
+    buffer_formatter = logging.Formatter(log_format, datefmt="%Y-%m-%dT%H:%M:%SZ")
+    buffer_formatter.converter = time.gmtime
+    buffer_handler.setFormatter(buffer_formatter)
     logging.getLogger().addHandler(buffer_handler)
 
     config = load_config()
