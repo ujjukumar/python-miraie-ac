@@ -1,0 +1,30 @@
+# systemd unit for the MirAIe AC controller daemon.
+#
+# Install on your Linux VM:
+#   1. Edit the paths below (User, WorkingDirectory, ExecStart) to match where
+#      you cloned the project and created the virtualenv.
+#   2. sudo cp example/ac-daemon.service /etc/systemd/system/ac-daemon.service
+#   3. sudo systemctl daemon-reload
+#   4. sudo systemctl enable --now ac-daemon.service
+#   5. Check logs with:  journalctl -u ac-daemon -f
+#
+# Then trigger control over Tailscale, e.g.:
+#   curl "http://<vm-tailscale-ip>:8765/start?token=YOUR_TOKEN&temp=24"
+#   curl "http://<vm-tailscale-ip>:8765/status?token=YOUR_TOKEN"
+#   curl "http://<vm-tailscale-ip>:8765/stop?token=YOUR_TOKEN"
+
+[Unit]
+Description=MirAIe AC controller daemon
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=azureuser
+WorkingDirectory=/home/azureuser/python-miraie-ac
+ExecStart=/home/azureuser/python-miraie-ac/.venv/bin/python example/ac-daemon.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

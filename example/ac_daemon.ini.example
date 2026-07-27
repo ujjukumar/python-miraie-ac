@@ -1,0 +1,22 @@
+[server]
+# Interface to bind. Use 0.0.0.0 to accept connections from any interface
+# (safe behind Tailscale + the token below), or your Tailscale IP to be strict.
+host = 0.0.0.0
+port = 8765
+# Shared secret required on every request (?token=... or X-Auth-Token header).
+# CHANGE THIS to a long random string.
+token = change-me
+
+[control]
+# How often to verify the AC configuration, in seconds.
+interval_seconds = 300
+# Friendly device name to control (as shown in the MirAIe app).
+# Leave blank to use the first discovered device.
+device =
+# Desired configuration to enforce whenever control is active.
+temperature = 26
+hvac_mode = cool
+fan_mode = auto
+# Converti7 capacity: off / 40 / 55 / 70 / 80 / 90 / fc / hc.
+# Only enforced in cool mode. Leave blank to not touch Converti7.
+converti7 = 40
