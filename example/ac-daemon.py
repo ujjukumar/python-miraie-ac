@@ -677,7 +677,10 @@ async def main() -> None:
         loop_task = asyncio.create_task(controller.run())
 
         app = build_app(controller, config.token)
-        runner = web.AppRunner(app)
+        # Disable aiohttp's per-request access log. The web UI polls /status and
+        # /logs every few seconds, so it would otherwise flood the journal (and
+        # the in-memory buffer shown in the UI, creating a feedback loop).
+        runner = web.AppRunner(app, access_log=None)
         await runner.setup()
         site = web.TCPSite(runner, config.host, config.port)
         await site.start()
