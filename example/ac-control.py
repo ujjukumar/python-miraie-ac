@@ -1,17 +1,49 @@
+"""Interactive example CLI for controlling MirAIe air conditioners.
+
+Demonstrates authentication, device discovery, control commands, and the
+event system for live status updates.
+"""
+
 import asyncio
 import configparser
+import contextlib
+import json
 from pathlib import Path
 
 from py_miraie_ac import (
     AuthException,
     AuthType,
+    ConnectionException,
+    Device,
     MirAIeAPI,
+    MobileNotRegisteredException,
 )
-from py_miraie_ac.enums import Converti7Mode, DisplayState, FanMode, HVACMode, PresetMode, SwingMode
+from py_miraie_ac.enums import Converti7Mode, FanMode, HVACMode
 
 CONFIG_FILE = Path(__file__).resolve().parent.parent / "login_info.ini"
+PREFS_FILE = Path(__file__).resolve().parent.parent / ".ac_control_prefs.json"
 
 SEPARATOR = "-" * 50
+
+
+class QuitRequested(Exception):
+    """Raised when the user asks to quit (Ctrl+C or Ctrl+D)."""
+
+
+# Live status/connection updates arrive on a background MQTT thread. Printing
+# directly from that thread would corrupt whatever prompt the main thread is
+# showing, so we buffer updates here and flush them from the main thread at
+# menu boundaries instead.
+_live_events: list[str] = []
+
+
+def flush_live_events() -> None:
+    """Print any buffered live updates. Called from the main thread only."""
+    if not _live_events:
+        return
+    print("\nRecent updates:")
+    while _live_events:
+        print(f"  {_live_events.pop(0)}")
 
 
 def load_credentials() -> tuple[str, str]:
@@ -34,20 +66,61 @@ def load_credentials() -> tuple[str, str]:
         raise SystemExit(1) from None
 
 
-def pick(prompt, options):
-    """Display numbered options and return the chosen item."""
+def load_prefs() -> dict[str, str]:
+    """Load saved preferences (e.g. last selected device). Returns {} if none."""
+    try:
+        data = json.loads(PREFS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_prefs(prefs: dict[str, str]) -> None:
+    """Persist preferences to disk. Failures are non-fatal."""
+    with contextlib.suppress(OSError):
+        PREFS_FILE.write_text(json.dumps(prefs, indent=2), encoding="utf-8")
+
+
+def pick(prompt: str, options: list[str]) -> str:
+    """Display numbered options and return the chosen item.
+
+    Pressing Ctrl+C or Ctrl+D quits the program cleanly.
+    """
+    flush_live_events()
     print(f"\n{prompt}")
     for i, opt in enumerate(options, 1):
         print(f"  {i}. {opt}")
     while True:
-        raw = input(">>> ").strip()
+        try:
+            raw = input(">>> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            raise QuitRequested from None
         if raw.isdigit() and 1 <= int(raw) <= len(options):
             return options[int(raw) - 1]
         print(f"  Enter a number between 1 and {len(options)}")
 
 
-def show_status(device):
-    """Print full device status."""
+def prompt_float(prompt: str) -> float | None:
+    """Prompt for a floating-point value.
+
+    Returns None if the user cancels with a blank line. Ctrl+C or Ctrl+D quits
+    the program cleanly.
+    """
+    while True:
+        try:
+            raw = input(prompt).strip()
+        except (EOFError, KeyboardInterrupt):
+            raise QuitRequested from None
+        if not raw:
+            return None
+        try:
+            return float(raw)
+        except ValueError:
+            print("  Enter a valid number (e.g. 24, -1.5) or press Enter to cancel")
+
+
+def show_status(device: Device) -> None:
+    """Print the core device status."""
     s = device.status
     online = "ONLINE" if s.is_online else "OFFLINE"
     print(f"\n{SEPARATOR}")
@@ -56,17 +129,8 @@ def show_status(device):
     print(f"  Power       : {s.power_mode.value}")
     print(f"  Temperature : {s.temperature}°C")
     print(f"  Room Temp   : {s.room_temp}°C (sensor)")
-    if device.room_temp_offset != 0:
-        print(f"  Calibrated  : {s.calibrated_room_temp}°C (offset {device.room_temp_offset:+.1f}°C)")
-        compensate = "ON" if device.auto_compensate else "OFF"
-        print(f"  Auto Comp.  : {compensate}")
     print(f"  HVAC Mode   : {s.hvac_mode.value}")
     print(f"  Fan Mode    : {s.fan_mode.value}")
-    print(f"  Preset      : {s.preset_mode.value}")
-    print(f"  Display     : {s.display_state.value}")
-    print(f"  V-Swing     : {s.vertical_swing_mode.name.lower()}")
-    print(f"  H-Swing     : {s.horizontal_swing_mode.name.lower()}")
-    print(f"  Capacity    : {s.converti7_mode.name}")
     print(f"  Last Update : {s.last_updated}")
     print(SEPARATOR)
 
@@ -78,20 +142,25 @@ DEVICE_ACTIONS = [
     "Set temperature",
     "Set HVAC mode",
     "Set fan mode",
-    "Set preset mode",
-    "Set display",
-    "Set eco mode",
-    "Set boost mode",
-    "Set vertical swing",
-    "Set horizontal swing",
     "Set capacity (Converti7)",
-    "Set room temp offset",
-    "Toggle auto-compensate",
+    "Quick Converti7 (toggle 40%)",
     "Back to device list",
 ]
 
 
-def handle_action(device, action):
+CONVERTI7_LABELS = {
+    Converti7Mode.OFF: "off",
+    Converti7Mode.CAPACITY_40: "40%",
+    Converti7Mode.CAPACITY_55: "55%",
+    Converti7Mode.CAPACITY_70: "70%",
+    Converti7Mode.CAPACITY_80: "80%",
+    Converti7Mode.CAPACITY_90: "90%",
+    Converti7Mode.FC: "100% (Full Cooling)",
+    Converti7Mode.HC: "110% (Hyper Cooling)",
+}
+
+
+def handle_action(device: Device, action: str) -> bool:
     """Execute the chosen action on the device. Returns False to go back."""
     match action:
         case "Show status":
@@ -106,15 +175,13 @@ def handle_action(device, action):
             print("  -> Turned OFF")
 
         case "Set temperature":
-            if device.auto_compensate and device.room_temp_offset != 0:
-                print(f"  (Auto-compensate ON: offset {device.room_temp_offset:+.1f}°C)")
-            while True:
-                raw = input("  Temperature (16-30): ").strip()
+            temp = prompt_float("  Temperature (16-30, blank to cancel): ")
+            if temp is None:
+                print("  Cancelled")
+            else:
                 try:
-                    temp = float(raw)
                     device.set_temperature(temp)
                     print(f"  -> Temperature set to {temp}°C")
-                    break
                 except ValueError as e:
                     print(f"  {e}")
 
@@ -130,86 +197,27 @@ def handle_action(device, action):
             device.set_fan_mode(FanMode(choice))
             print(f"  -> Fan mode set to {choice}")
 
-        case "Set preset mode":
-            modes = [m.value for m in PresetMode]
-            choice = pick("Select preset mode:", modes)
-            device.set_preset_mode(PresetMode(choice))
-            print(f"  -> Preset mode set to {choice}")
-
-        case "Set display":
-            states = [s.value for s in DisplayState]
-            choice = pick("Display state:", states)
-            device.set_display_state(DisplayState(choice))
-            print(f"  -> Display set to {choice}")
-
-        case "Set eco mode":
-            choice = pick("Eco mode:", ["on", "off"])
-            device.set_eco_mode(choice == "on")
-            print(f"  -> Eco mode {'enabled' if choice == 'on' else 'disabled'}")
-
-        case "Set boost mode":
-            choice = pick("Boost mode:", ["on", "off"])
-            device.set_boost_mode(choice == "on")
-            print(f"  -> Boost mode {'enabled' if choice == 'on' else 'disabled'}")
-
-        case "Set vertical swing":
-            modes = [m.name.lower() for m in SwingMode]
-            choice = pick("Vertical swing:", modes)
-            device.set_vertical_swing_mode(SwingMode[choice.upper()])
-            print(f"  -> Vertical swing set to {choice}")
-
-        case "Set horizontal swing":
-            modes = [m.name.lower() for m in SwingMode]
-            choice = pick("Horizontal swing:", modes)
-            device.set_horizontal_swing_mode(SwingMode[choice.upper()])
-            print(f"  -> Horizontal swing set to {choice}")
-
         case "Set capacity (Converti7)":
-            labels = {
-                Converti7Mode.OFF: "off",
-                Converti7Mode.CAPACITY_40: "40%",
-                Converti7Mode.CAPACITY_55: "55%",
-                Converti7Mode.CAPACITY_70: "70%",
-                Converti7Mode.CAPACITY_80: "80%",
-                Converti7Mode.CAPACITY_90: "90%",
-                Converti7Mode.FC: "100% (Full Cooling)",
-                Converti7Mode.HC: "110% (Hyper Cooling)",
-            }
-            options = list(labels.values())
-            modes = list(labels.keys())
-            print(f"  Current capacity: {labels[device.status.converti7_mode]}")
+            print(f"  Current capacity: {CONVERTI7_LABELS[device.status.converti7_mode]}")
             if device.status.hvac_mode != HVACMode.COOL:
                 print("  WARNING: Converti7 only works in COOL mode!")
+            options = list(CONVERTI7_LABELS.values())
             choice = pick("Select capacity:", options)
-            selected = modes[options.index(choice)]
+            selected = list(CONVERTI7_LABELS.keys())[options.index(choice)]
             device.set_converti7_mode(selected)
             print(f"  -> Capacity set to {choice}")
 
-        case "Set room temp offset":
-            print(f"  Current offset: {device.room_temp_offset:+.1f}°C")
-            print(f"  AC sensor reads: {device.status.room_temp}°C")
-            print("  If your actual room temp is lower, enter a negative value (e.g. -2)")
-            while True:
-                raw = input("  Offset in °C: ").strip()
-                try:
-                    offset = float(raw)
-                    device.room_temp_offset = offset
-                    print(f"  -> Offset set to {offset:+.1f}°C")
-                    print(f"  -> Calibrated room temp: {device.status.calibrated_room_temp}°C")
-                    break
-                except ValueError:
-                    print("  Enter a valid number (e.g. -2, -1.5, 0)")
-
-        case "Toggle auto-compensate":
-            if device.room_temp_offset == 0:
-                print("  Set a room temp offset first!")
-            else:
-                new_state = not device.auto_compensate
-                device.auto_compensate = new_state
-                state = "ON" if new_state else "OFF"
-                print(f"  -> Auto-compensate: {state}")
-                if new_state:
-                    print(f"     set_temperature() will now adjust by {-device.room_temp_offset:+.1f}°C")
+        case "Quick Converti7 (toggle 40%)":
+            current = device.status.converti7_mode
+            target = (
+                Converti7Mode.OFF
+                if current == Converti7Mode.CAPACITY_40
+                else Converti7Mode.CAPACITY_40
+            )
+            if device.status.hvac_mode != HVACMode.COOL:
+                print("  WARNING: Converti7 only works in COOL mode!")
+            device.set_converti7_mode(target)
+            print(f"  -> Converti7 {CONVERTI7_LABELS[target]}")
 
         case "Back to device list":
             return False
@@ -217,7 +225,22 @@ def handle_action(device, action):
     return True
 
 
-async def main():
+def on_status_changed(device: Device) -> None:
+    """Live update handler fired when a device reports new status over MQTT."""
+    s = device.status
+    _live_events.append(
+        f"[live] {device.friendly_name}: power={s.power_mode.value}, "
+        f"temp={s.temperature}°C, mode={s.hvac_mode.value}"
+    )
+
+
+def on_connection_changed(device: Device) -> None:
+    """Live update handler fired when a device goes online/offline."""
+    state = "online" if device.status.is_online else "offline"
+    _live_events.append(f"[live] {device.friendly_name} is now {state}")
+
+
+async def main() -> None:
     username, password = load_credentials()
     async with MirAIeAPI(
         auth_type=AuthType.MOBILE,
@@ -229,37 +252,70 @@ async def main():
         except AuthException:
             print("Authentication failed. Check your credentials.")
             return
+        except MobileNotRegisteredException:
+            print("This mobile number is not registered with MirAIe.")
+            return
+        except ConnectionException as exc:
+            print(f"Could not connect to MirAIe: {exc}")
+            return
 
         devices = api.devices
         if not devices:
             print("No devices found.")
             return
 
+        # Subscribe to live updates so changes made from the AC remote or the
+        # MirAIe app (and confirmations of our own commands) appear here.
+        for device in devices:
+            device.on("status_changed", on_status_changed)
+            device.on("connection_changed", on_connection_changed)
+
         print(f"\nConnected! Found {len(devices)} device(s).\n")
 
-        while True:
-            # Device selection
-            device_names = [f"{d.friendly_name} ({d.area_name})" for d in devices]
-            device_names.append("Exit")
+        prefs = load_prefs()
+        last_device_id = prefs.get("last_device_id")
 
-            choice = pick("Select a device:", device_names)
-            if choice == "Exit":
-                print("Bye!")
-                break
-
-            idx = device_names.index(choice)
-            device = devices[idx]
-            show_status(device)
-
-            # Action loop for the selected device
+        try:
+            auto_select = True
             while True:
-                action = pick(f"[{device.friendly_name}] Choose action:", DEVICE_ACTIONS)
-                if not handle_action(device, action):
-                    break
+                device = None
+
+                # On the first pass, jump straight into the last-used device.
+                if auto_select and last_device_id:
+                    device = next(
+                        (d for d in devices if d.device_id == last_device_id), None
+                    )
+                    if device is not None:
+                        print(f"Auto-selected last device: {device.friendly_name}")
+                auto_select = False
+
+                if device is None:
+                    device_names = [f"{d.friendly_name} ({d.area_name})" for d in devices]
+                    device_names.append("Exit")
+                    choice = pick("Select a device:", device_names)
+                    if choice == "Exit":
+                        break
+                    device = devices[device_names.index(choice)]
+
+                # Remember this device for next run.
+                prefs["last_device_id"] = device.device_id
+                save_prefs(prefs)
+
+                show_status(device)
+
+                # Action loop for the selected device
+                while True:
+                    action = pick(f"[{device.friendly_name}] Choose action:", DEVICE_ACTIONS)
+                    if not handle_action(device, action):
+                        break
+        except QuitRequested:
+            pass
+
+        print("\nBye!")
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, QuitRequested):
         print("\nBye!")
