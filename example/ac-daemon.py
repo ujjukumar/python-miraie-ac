@@ -29,6 +29,7 @@ import contextlib
 import hmac
 import logging
 import signal
+from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -53,6 +54,18 @@ CONFIG_FILE = _ROOT / "ac_daemon.ini"
 CREDENTIALS_FILE = _ROOT / "login_info.ini"
 
 logger = logging.getLogger("ac_daemon")
+
+# Recent log lines kept in memory so the web UI can show them.
+_LOG_BUFFER: deque[str] = deque(maxlen=200)
+
+
+class _BufferLogHandler(logging.Handler):
+    """Logging handler that appends formatted records to _LOG_BUFFER."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        with contextlib.suppress(Exception):
+            _LOG_BUFFER.append(self.format(record))
+
 
 CONVERTI7_MAP: dict[str, Converti7Mode] = {
     "off": Converti7Mode.OFF,
@@ -88,6 +101,231 @@ fan_mode = auto
 # Converti7 capacity: off / 40 / 55 / 70 / 80 / 90 / fc / hc.
 # Only enforced in cool mode. Leave blank to not touch Converti7.
 converti7 = off
+"""
+
+# Single-page web UI served at GET /. Plain string (not an f-string) so the
+# JavaScript ${...} and literal \n stay intact.
+INDEX_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MirAIe AC Control</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --muted:#94a3b8; --text:#e2e8f0;
+          --accent:#38bdf8; --accent2:#0ea5e9; --ok:#22c55e; --off:#64748b; --err:#f87171; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+         background: var(--bg); color: var(--text); padding: 16px; }
+  .wrap { max-width: 520px; margin: 0 auto; }
+  h1 { font-size: 1.25rem; margin: 0 0 12px; }
+  .card { background: var(--card); border-radius: 14px; padding: 16px; margin-bottom: 14px;
+          box-shadow: 0 1px 3px rgba(0,0,0,.4); }
+  label { display:block; font-size:.8rem; color: var(--muted); margin: 10px 0 4px; }
+  input, select { width:100%; padding:10px 12px; border-radius:10px; border:1px solid #334155;
+                  background:#0b1220; color:var(--text); font-size:1rem; }
+  .row { display:flex; gap:10px; }
+  .row > div { flex:1; }
+  .btns { display:flex; gap:10px; margin-top:14px; }
+  button { flex:1; padding:12px; border:0; border-radius:10px; font-size:1rem; font-weight:600;
+           cursor:pointer; }
+  .primary { background: var(--accent2); color:#001018; }
+  .ghost { background:#334155; color: var(--text); }
+  .badge { font-size:.75rem; padding:3px 10px; border-radius:999px; font-weight:700; }
+  .badge.on { background: var(--ok); color:#04140a; }
+  .badge.off { background: var(--off); color:#0b0f19; }
+  .head { display:flex; justify-content:space-between; align-items:center; }
+  .grid { display:grid; grid-template-columns:auto 1fr; gap:6px 14px; font-size:.9rem; margin-top:10px; }
+  .grid b { color: var(--text); }
+  .k { color: var(--muted); }
+  .msg { min-height:1.2em; font-size:.85rem; margin-top:10px; }
+  .msg.ok { color: var(--accent); }
+  .msg.err { color: var(--err); }
+  pre#logs { background:#0b1220; border:1px solid #334155; border-radius:10px; padding:10px;
+             height:220px; overflow:auto; font-size:.72rem; line-height:1.35; margin:0;
+             white-space:pre-wrap; word-break:break-word; }
+  .sub { color: var(--muted); font-size:.8rem; margin:0 0 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>MirAIe AC Control</h1>
+
+  <div class="card">
+    <label for="token">Access token</label>
+    <input id="token" type="password" placeholder="enter token" autocomplete="off">
+  </div>
+
+  <div class="card">
+    <div class="head">
+      <strong id="device">-</strong>
+      <span id="active" class="badge off">...</span>
+    </div>
+    <div class="grid">
+      <div class="k">Power</div><div><b id="power">-</b></div>
+      <div class="k">Setpoint</div><div><b id="setpoint">-</b></div>
+      <div class="k">Room temp</div><div><b id="room">-</b></div>
+      <div class="k">Mode / Fan</div><div><b id="modefan">-</b></div>
+      <div class="k">Converti7</div><div><b id="conv">-</b></div>
+      <div class="k">Online</div><div><b id="online">-</b></div>
+      <div class="k">Last check</div><div id="lastcheck">-</div>
+      <div class="k">Last actions</div><div id="lastactions">-</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <p class="sub">Set the target configuration, then Start / Apply.</p>
+    <div class="row">
+      <div>
+        <label for="temp">Temperature (C)</label>
+        <input id="temp" type="number" min="16" max="30" step="0.5" value="24">
+      </div>
+      <div>
+        <label for="mode">HVAC mode</label>
+        <select id="mode">
+          <option value="cool">Cool</option>
+          <option value="auto">Auto</option>
+          <option value="dry">Dry</option>
+          <option value="fan">Fan</option>
+        </select>
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label for="fan">Fan</label>
+        <select id="fan">
+          <option value="auto">Auto</option>
+          <option value="quiet">Quiet</option>
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+        </select>
+      </div>
+      <div>
+        <label for="converti7">Converti7</label>
+        <select id="converti7">
+          <option value="">(don't enforce)</option>
+          <option value="off">Off</option>
+          <option value="40">40%</option>
+          <option value="55">55%</option>
+          <option value="70">70%</option>
+          <option value="80">80%</option>
+          <option value="90">90%</option>
+          <option value="fc">100% (Full)</option>
+          <option value="hc">110% (Hyper)</option>
+        </select>
+      </div>
+    </div>
+    <div class="btns">
+      <button id="startBtn" class="primary">Start / Apply</button>
+      <button id="stopBtn" class="ghost">Stop</button>
+    </div>
+    <div id="msg" class="msg"></div>
+  </div>
+
+  <div class="card">
+    <label>Log output</label>
+    <pre id="logs">...</pre>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const CONV_NAME_TO_OPT = { OFF:'off', CAPACITY_40:'40', CAPACITY_55:'55',
+  CAPACITY_70:'70', CAPACITY_80:'80', CAPACITY_90:'90', FC:'fc', HC:'hc' };
+let formInit = false;
+
+function token() { return localStorage.getItem('ac_token') || ''; }
+
+function buildQuery(params) {
+  const p = new URLSearchParams(params || {});
+  p.set('token', token());
+  return p.toString();
+}
+
+async function api(path, params) {
+  const res = await fetch(path + '?' + buildQuery(params));
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(res.status + ': ' + t.trim());
+  }
+  return res.json();
+}
+
+function msg(text, isErr) {
+  const el = $('msg');
+  el.textContent = text || '';
+  el.className = 'msg ' + (isErr ? 'err' : 'ok');
+}
+
+function renderStatus(s) {
+  $('device').textContent = s.device;
+  const a = $('active');
+  a.textContent = s.active ? 'ACTIVE' : 'stopped';
+  a.className = 'badge ' + (s.active ? 'on' : 'off');
+  const c = s.current || {};
+  $('power').textContent = c.power ?? '-';
+  $('setpoint').textContent = (c.setpoint ?? '-') + ' C';
+  $('room').textContent = (c.room_temp ?? '-') + ' C';
+  $('modefan').textContent = (c.hvac_mode ?? '-') + ' / ' + (c.fan_mode ?? '-');
+  $('conv').textContent = c.converti7 ?? '-';
+  $('online').textContent = c.online ? 'yes' : 'no';
+  $('lastcheck').textContent = s.last_check || 'never';
+  $('lastactions').textContent = (s.last_actions || []).join(', ') || '-';
+  if (!formInit && s.desired) {
+    $('temp').value = s.desired.temperature;
+    $('mode').value = s.desired.hvac_mode;
+    $('fan').value = s.desired.fan_mode;
+    $('converti7').value = CONV_NAME_TO_OPT[s.desired.converti7_mode] || '';
+    formInit = true;
+  }
+}
+
+async function refresh() {
+  try { renderStatus(await api('/status')); }
+  catch (e) { msg(e.message, true); }
+}
+
+async function refreshLogs() {
+  try {
+    const r = await api('/logs');
+    const pre = $('logs');
+    const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 12;
+    pre.textContent = (r.lines || []).join('\n');
+    if (atBottom) pre.scrollTop = pre.scrollHeight;
+  } catch (e) { /* ignore log fetch errors */ }
+}
+
+async function start() {
+  try {
+    const r = await api('/start', {
+      temp: $('temp').value,
+      mode: $('mode').value,
+      fan: $('fan').value,
+      converti7: $('converti7').value,
+    });
+    msg('Started - enforcing ' + JSON.stringify(r.desired));
+    refresh(); refreshLogs();
+  } catch (e) { msg(e.message, true); }
+}
+
+async function stop() {
+  try { await api('/stop'); msg('Stopped.'); refresh(); refreshLogs(); }
+  catch (e) { msg(e.message, true); }
+}
+
+$('token').value = token();
+$('token').addEventListener('change', (e) => {
+  localStorage.setItem('ac_token', e.target.value.trim());
+  formInit = false; refresh(); refreshLogs();
+});
+$('startBtn').addEventListener('click', start);
+$('stopBtn').addEventListener('click', stop);
+refresh(); refreshLogs();
+setInterval(() => { refresh(); refreshLogs(); }, 5000);
+</script>
+</body>
+</html>
 """
 
 
@@ -353,14 +591,23 @@ def build_app(controller: Controller, token: str) -> web.Application:
         require_token(request)
         return web.json_response(controller.snapshot())
 
+    async def handle_logs(request: web.Request) -> web.Response:
+        require_token(request)
+        return web.json_response({"lines": list(_LOG_BUFFER)})
+
+    async def handle_index(request: web.Request) -> web.Response:
+        return web.Response(text=INDEX_HTML, content_type="text/html")
+
     app = web.Application()
     app.add_routes(
         [
+            web.get("/", handle_index),
             web.get("/start", handle_start),
             web.post("/start", handle_start),
             web.get("/stop", handle_stop),
             web.post("/stop", handle_stop),
             web.get("/status", handle_status),
+            web.get("/logs", handle_logs),
         ]
     )
     return app
@@ -386,10 +633,11 @@ def _install_signal_handlers(stop_event: asyncio.Event) -> None:
 
 
 async def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    log_format = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+    logging.basicConfig(level=logging.INFO, format=log_format)
+    buffer_handler = _BufferLogHandler()
+    buffer_handler.setFormatter(logging.Formatter(log_format))
+    logging.getLogger().addHandler(buffer_handler)
 
     config = load_config()
     if config.token in ("", "change-me"):
