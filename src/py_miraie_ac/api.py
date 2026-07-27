@@ -218,6 +218,17 @@ class MirAIeAPI:
 
         return status
 
+    async def refresh_status(self, device: Device) -> DeviceStatus:
+        """Fetches the latest status for a device from the REST API.
+
+        Forces a fresh reading instead of waiting for the next MQTT push. The
+        device's ``status`` is updated in place and also returned.
+        """
+        status = await self._get_device_status(device.device_id)
+        status._room_temp_offset = device.room_temp_offset
+        device.status = status
+        return status
+
     async def get_energy_consumption(
         self,
         device: Device,

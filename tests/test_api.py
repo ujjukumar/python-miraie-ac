@@ -6,10 +6,10 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from py_miraie_ac.api import MirAIeAPI
-from py_miraie_ac.enums import AuthType, ConsumptionPeriodType
+from py_miraie_ac.enums import AuthType, ConsumptionPeriodType, PowerMode
 from py_miraie_ac.exceptions import AuthException, ConnectionException, MobileNotRegisteredException
 from py_miraie_ac.user import User
-from tests.conftest import SAMPLE_LOGIN_RESPONSE
+from tests.conftest import SAMPLE_LOGIN_RESPONSE, SAMPLE_STATUS_JSON
 
 
 @pytest.fixture
@@ -152,3 +152,25 @@ class TestEnergyConsumption:
         assert "grain=Monthly" in called_url
         assert "startDate=032025" in called_url
         assert "endDate=032025" in called_url
+
+
+class TestRefreshStatus:
+    def _make_api(self, mock_session):
+        api = MirAIeAPI(auth_type=AuthType.MOBILE, login_id="123", password="test")
+        api._http_session = mock_session
+        api._user = User(
+            access_token="tok", refresh_token="ref", user_id="uid", expires_in=3600
+        )
+        return api
+
+    @pytest.mark.asyncio
+    async def test_refresh_status_updates_device(self, mock_response, sample_device):
+        mock_session = AsyncMock()
+        mock_session.get = AsyncMock(return_value=mock_response(200, SAMPLE_STATUS_JSON))
+        api = self._make_api(mock_session)
+
+        status = await api.refresh_status(sample_device)
+
+        assert status.power_mode == PowerMode.ON
+        assert status.temperature == 24.0
+        assert sample_device.status is status

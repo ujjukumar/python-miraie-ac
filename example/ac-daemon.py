@@ -14,6 +14,7 @@ Endpoints (every request needs the shared token from ac_daemon.ini, passed as
                       e.g. /start?token=SECRET&temp=24&mode=cool&fan=auto
     GET/POST /stop    Stop automatic control.
     GET      /status  Report control state, desired config, and live AC status.
+    GET      /refresh Force a fresh status read from MirAIe, then report it.
 
 Run it with the project's virtual environment:
 
@@ -131,6 +132,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
            cursor:pointer; }
   .primary { background: var(--accent2); color:#001018; }
   .ghost { background:#334155; color: var(--text); }
+  .tokenbtn { flex:0 0 auto; padding:10px 18px; }
+  .refreshbtn { flex:0 0 auto; padding:6px 12px; font-size:.8rem; }
+  .badges { display:flex; gap:8px; align-items:center; }
   .badge { font-size:.75rem; padding:3px 10px; border-radius:999px; font-weight:700; }
   .badge.on { background: var(--ok); color:#04140a; }
   .badge.off { background: var(--off); color:#0b0f19; }
@@ -153,13 +157,19 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
   <div class="card">
     <label for="token">Access token</label>
-    <input id="token" type="password" placeholder="enter token" autocomplete="off">
+    <div class="row">
+      <input id="token" type="password" placeholder="enter token" autocomplete="off">
+      <button id="saveBtn" class="ghost tokenbtn">Save</button>
+    </div>
   </div>
 
   <div class="card">
     <div class="head">
       <strong id="device">-</strong>
-      <span id="active" class="badge off">...</span>
+      <div class="badges">
+        <span id="active" class="badge off">...</span>
+        <button id="refreshBtn" class="ghost refreshbtn">Refresh</button>
+      </div>
     </div>
     <div class="grid">
       <div class="k">Power</div><div><b id="power">-</b></div>
@@ -314,11 +324,26 @@ async function stop() {
   catch (e) { msg(e.message, true); }
 }
 
+async function refreshNow() {
+  msg('Refreshing from AC...');
+  try {
+    renderStatus(await api('/refresh'));
+    refreshLogs();
+    msg('Refreshed.');
+  } catch (e) { msg(e.message, true); }
+}
+
+function applyToken() {
+  localStorage.setItem('ac_token', $('token').value.trim());
+  formInit = false;
+  msg('Token saved.');
+  refresh(); refreshLogs();
+}
+
 $('token').value = token();
-$('token').addEventListener('change', (e) => {
-  localStorage.setItem('ac_token', e.target.value.trim());
-  formInit = false; refresh(); refreshLogs();
-});
+$('token').addEventListener('change', applyToken);
+$('saveBtn').addEventListener('click', applyToken);
+$('refreshBtn').addEventListener('click', refreshNow);
 $('startBtn').addEventListener('click', start);
 $('stopBtn').addEventListener('click', stop);
 refresh(); refreshLogs();
@@ -461,10 +486,12 @@ class Controller:
 
     def __init__(
         self,
+        api: MirAIeAPI,
         device: Device,
         default: DesiredConfig,
         interval_seconds: int,
     ) -> None:
+        self._api = api
         self._device = device
         self._default = default
         self._interval = interval_seconds
@@ -490,6 +517,17 @@ class Controller:
         self._active = False
         self._wake.set()
         logger.info("Automatic control stopped")
+
+    async def refresh_status(self) -> None:
+        """Force a fresh status read from the MirAIe REST API."""
+        status = await self._api.refresh_status(self._device)
+        logger.info(
+            "Refreshed %s from cloud: power=%s setpoint=%s room=%s",
+            self._device.friendly_name,
+            status.power_mode.value,
+            status.temperature,
+            status.room_temp,
+        )
 
     async def run(self) -> None:
         """Main loop: enforce on /start and then once per interval while active."""
@@ -595,6 +633,14 @@ def build_app(controller: Controller, token: str) -> web.Application:
         require_token(request)
         return web.json_response({"lines": list(_LOG_BUFFER)})
 
+    async def handle_refresh(request: web.Request) -> web.Response:
+        require_token(request)
+        try:
+            await controller.refresh_status()
+        except Exception as exc:
+            raise web.HTTPBadGateway(text=f"refresh failed: {exc}\n") from exc
+        return web.json_response(controller.snapshot())
+
     async def handle_index(request: web.Request) -> web.Response:
         return web.Response(text=INDEX_HTML, content_type="text/html")
 
@@ -607,6 +653,7 @@ def build_app(controller: Controller, token: str) -> web.Application:
             web.get("/stop", handle_stop),
             web.post("/stop", handle_stop),
             web.get("/status", handle_status),
+            web.get("/refresh", handle_refresh),
             web.get("/logs", handle_logs),
         ]
     )
@@ -673,7 +720,7 @@ async def main() -> None:
 
         logger.info("Controlling device: %s", device.friendly_name)
 
-        controller = Controller(device, config.desired, config.interval_seconds)
+        controller = Controller(api, device, config.desired, config.interval_seconds)
         loop_task = asyncio.create_task(controller.run())
 
         app = build_app(controller, config.token)
@@ -685,7 +732,7 @@ async def main() -> None:
         site = web.TCPSite(runner, config.host, config.port)
         await site.start()
         logger.info(
-            "Listening on http://%s:%d  (endpoints: /start /stop /status)",
+            "Listening on http://%s:%d  (web UI at /, endpoints: /start /stop /status /refresh /logs)",
             config.host,
             config.port,
         )
