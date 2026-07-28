@@ -509,6 +509,7 @@ class Controller:
         self._interval = interval_seconds
         self._desired = default
         self._active = False
+        self._force_power = False
         self._wake = asyncio.Event()
         self._last_check: datetime | None = None
         self._last_actions: list[str] = []
@@ -518,9 +519,10 @@ class Controller:
         return self._default
 
     def start(self, desired: DesiredConfig) -> None:
-        """Activate control with the given desired config and force a check now."""
+        """Activate control: turn the AC on with the given config and check now."""
         self._desired = desired
         self._active = True
+        self._force_power = True
         self._wake.set()
         logger.info("Automatic control started: %s", desired.as_dict())
 
@@ -550,15 +552,23 @@ class Controller:
             else:
                 await self._wake.wait()
             self._wake.clear()
+            force_power = self._force_power
+            self._force_power = False
 
             if self._active:
                 try:
-                    await self.enforce()
+                    await self.enforce(force_power_on=force_power)
                 except Exception:
                     logger.exception("Enforcement cycle failed")
 
-    async def enforce(self) -> None:
-        """Compare live status against the desired config and correct any drift."""
+    async def enforce(self, *, force_power_on: bool = False) -> None:
+        """Compare live status against the desired config and correct any drift.
+
+        During the periodic loop the daemon never powers the AC on by itself; it
+        only corrects settings while the AC is already running, so switching it
+        off with the remote is respected. Power is forced on only when
+        ``force_power_on`` is set (an explicit /start request).
+        """
         self._last_check = datetime.now(UTC)
         status = self._device.status
         name = self._device.friendly_name
@@ -566,6 +576,11 @@ class Controller:
         if not status.is_online:
             logger.warning("%s is offline; will retry next cycle", name)
             self._last_actions = ["device offline - skipped"]
+            return
+
+        if status.power_mode != PowerMode.ON and not force_power_on:
+            logger.debug("%s is off; leaving it off", name)
+            self._last_actions = ["off - left as is"]
             return
 
         desired = self._desired
